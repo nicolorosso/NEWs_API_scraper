@@ -51,7 +51,7 @@ df_news2 = pd.json_normalize(news2, record_path='articles')
 # Concatenate the two different dataframes to create a single one bigger 
 df_final = pd.concat([df_news, df_news2], ignore_index=True)
 
-"""DATA CLEANING FOR FUTURE MODELING"""
+#DATA CLEANING FOR FUTURE MODELING
 
 import re 
 import string 
@@ -74,7 +74,7 @@ stop_words= set(stopwords.words('english'))
 # Creation of a new column with cleaned text and no stop words 
 df_final['cleaned_final'] = df_final['cleaned_text'].apply(lambda x: ' '.join([word for word in x.split() if word not in (stop_words)]))
 
-"""SENTIMENT ANALYSIS"""
+#SENTIMENT ANALYSIS
 
 #Installation of transformer library and importing the pipeline class from it
 !pip install -q transformers
@@ -89,7 +89,7 @@ df_final['sentiment'] = df_final.description.apply(lambda x: sentiment_pipeline(
 # Unpacking the sentiment and score in the sentiment column in two distinct columns: sentiment and score
 df_final['sentiment'], df_final['score'] = df_final.sentiment.apply(lambda x: x[0]['label']), df_final.sentiment.apply(lambda x: x[0]['score'])
 
-"""DEFINING THE FINAL DATASET"""
+#DEFINING THE FINAL DATASET
 
 # Converting the dtype of columns publishedAt from object to datetime
 df_final.publishedAt = df_final.publishedAt.astype('datetime64')

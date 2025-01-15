@@ -1,112 +1,118 @@
-
-# importing json module that will help converting the datastructures to JSON strings.
 import json
-# importing requests module to interact with APIs
 import requests
-# importing pandas for data manipulation 
 import pandas as pd
-# importing classes form datatime to deal with the date 
-from datetime import date, timedelta
-# importing nltk and downloading stopwords to later remove them
 import nltk
-nltk.download('stopwords')
+import re
+import string
+from datetime import date, timedelta
+from typing import List, Dict
+from dataclasses import dataclass
+from transformers import pipeline
 from nltk.corpus import stopwords
 
-#set the credentials to access data from the news API for the first dataframe. 
+# Download required NLTK data
+nltk.download('stopwords')
 
-url = 'https://newsapi.org/v2/everything?'
-# selecting the topic of interest 
-topic = ['q=bitcoin&', 'q=finance&', 'q=metaverse&', 'q=recession&'] 
-# selecting as range of dates the past month (max. period available)
-x = date.today()    
-y = x - timedelta(days=30)
-date1 = f'from={y}&to={x}&'
-sort = 'sortBy=popularity'
-apikey= '&apiKey=fa422c784ca843a0bb09c0a9381a4abf'
+@dataclass
+class NewsAPIConfig:
+    """Configuration for NewsAPI requests"""
+    base_url: str = 'https://newsapi.org/v2/everything?'
+    api_key: str = 'fa422c784ca843a0bb09c0a9381a4abf'
+    sort_by: str = 'popularity'
+    
+    def get_date_range(self, days: int = 30) -> str:
+        """Generate date range string for API query"""
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days)
+        return f'from={start_date}&to={end_date}&'
 
-# Access the API and storing the results in a json file 
-news = []
-for i in topic:
-  news.append(requests.get(url+i+date1+sort+apikey).json())
-# Normalize JSON data into a flat table
-df_news = pd.json_normalize(news, record_path='articles')
+class NewsAnalyzer:
+    def __init__(self, config: NewsAPIConfig):
+        self.config = config
+        self.sentiment_pipeline = pipeline("sentiment-analysis")
+        self.stop_words = set(stopwords.words('english'))
 
-#set the credentials to access data from the news API for the second dataframe.
-url = 'https://newsapi.org/v2/everything?'
-# selecting different topics of interest
-topic = ['q=war&', 'q=election&', 'q=covid&', 'q=Trump&'] 
-# selecting the same range of dates 
-date2 = f'from={y}&to={x}&'
-sort = 'sortBy=popularity'
-apikey= '&apiKey=fa422c784ca843a0bb09c0a9381a4abf'
+    def fetch_news(self, topics: List[str]) -> pd.DataFrame:
+        """Fetch news articles for given topics"""
+        news_data = []
+        date_range = self.config.get_date_range()
+        
+        for topic in topics:
+            query_url = (
+                f"{self.config.base_url}"
+                f"q={topic}&"
+                f"{date_range}"
+                f"sortBy={self.config.sort_by}"
+                f"&apiKey={self.config.api_key}"
+            )
+            response = requests.get(query_url).json()
+            news_data.append(response)
+        
+        return pd.json_normalize(news_data, record_path='articles')
 
-# Access the API and storing the results in a json file 
-news2 = []
-for i in topic:
-  news2.append(requests.get(url+i+date2+sort+apikey).json())
+    @staticmethod
+    def clean_text(text: str) -> str:
+        """Clean text by removing special characters, numbers, and converting to lowercase"""
+        text = text.lower()
+        text = re.sub('\[.*?\]', "", text)
+        text = re.sub(f"[{re.escape(string.punctuation)}]", "", text)
+        text = re.sub("\w*\d\w*", "", text)
+        return text
 
-# Normalize JSON data into a flat table
-df_news2 = pd.json_normalize(news2, record_path='articles')
+    def remove_stopwords(self, text: str) -> str:
+        """Remove stopwords from text"""
+        return ' '.join([word for word in text.split() if word not in self.stop_words])
 
-# Concatenate the two different dataframes to create a single one bigger 
-df_final = pd.concat([df_news, df_news2], ignore_index=True)
+    def analyze_sentiment(self, text: str) -> Dict:
+        """Analyze sentiment of given text"""
+        result = self.sentiment_pipeline(text)[0]
+        return {
+            'sentiment': result['label'],
+            'score': result['score']
+        }
 
-#DATA CLEANING FOR FUTURE MODELING
+    def process_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Process dataframe with text cleaning and sentiment analysis"""
+        # Clean text and remove stopwords
+        df['cleaned_text'] = df['description'].apply(self.clean_text)
+        df['cleaned_final'] = df['cleaned_text'].apply(self.remove_stopwords)
+        
+        # Analyze sentiment
+        sentiments = df['description'].apply(self.analyze_sentiment)
+        df['sentiment'] = sentiments.apply(lambda x: x['sentiment'])
+        df['score'] = sentiments.apply(lambda x: x['score'])
+        
+        # Additional processing
+        df['publishedAt'] = pd.to_datetime(df['publishedAt'])
+        df['description_length'] = df['description'].str.split().str.len()
+        df['author'] = df['author'].fillna('author not indicated')
+        
+        # Clean up intermediate columns
+        df = df.drop(['cleaned_text', 'source.id'], axis=1)
+        
+        return df
 
-import re 
-import string 
+def main():
+    # Initialize configuration
+    config = NewsAPIConfig()
+    analyzer = NewsAnalyzer(config)
+    
+    # Define topics
+    financial_topics = ['bitcoin', 'finance', 'metaverse', 'recession']
+    news_topics = ['war', 'election', 'covid', 'Trump']
+    
+    # Fetch and process news
+    financial_df = analyzer.fetch_news(financial_topics)
+    news_df = analyzer.fetch_news(news_topics)
+    
+    # Combine and process final dataset
+    final_df = pd.concat([financial_df, news_df], ignore_index=True)
+    final_df = analyzer.process_dataframe(final_df)
+    
+    # Save to CSV
+    final_df.to_csv("news_analysis.csv", index=False)
+    
+    return final_df
 
-# lowercase for every words, Removing words within parenthesis, punctuations and words containing numbers 
-def clean_text_round1(text): 
-  text = text.lower()
-  text = re.sub('\[.*?\]', "", text)
-  text = re.sub("[%s]" % re.escape(string.punctuation), "", text)
-  text = re.sub("\w*\d\w*", "", text)
-  return text
-
-# Creation of a new column with cleaned text 
-round1 = lambda x: clean_text_round1(x)
-df_final['cleaned_text'] = df_final.description.apply(round1)
-
-# Importing stop words in english
-stop_words= set(stopwords.words('english'))
-
-# Creation of a new column with cleaned text and no stop words 
-df_final['cleaned_final'] = df_final['cleaned_text'].apply(lambda x: ' '.join([word for word in x.split() if word not in (stop_words)]))
-
-#SENTIMENT ANALYSIS
-
-#Installation of transformer library and importing the pipeline class from it
-!pip install -q transformers
-from transformers import pipeline
-
-#Calling the pipeline
-sentiment_pipeline = pipeline("sentiment-analysis")
-
-# Creation of a new column with sentiment analysis's reults 
-df_final['sentiment'] = df_final.description.apply(lambda x: sentiment_pipeline(x))
-
-# Unpacking the sentiment and score in the sentiment column in two distinct columns: sentiment and score
-df_final['sentiment'], df_final['score'] = df_final.sentiment.apply(lambda x: x[0]['label']), df_final.sentiment.apply(lambda x: x[0]['score'])
-
-#DEFINING THE FINAL DATASET
-
-# Converting the dtype of columns publishedAt from object to datetime
-df_final.publishedAt = df_final.publishedAt.astype('datetime64')
-
-# Adding a column with the count of words of the description for each row
-df_final['description_length'] = df_final['description'].apply(lambda x: len(x.split(' ')))
-
-#drop un-necessary columns
-df_final = df_final.drop('cleaned_text', 1)
-df_final = df_final.drop('source.id', 1)
-
-#fill the nan values in the 'author' column
-df_final['author'] = df_final['author'].fillna('author not indicated')
-
-#save the final work in a csv file
-df_final.to_csv("df_notizie.csv", index=False)
-
-df_final
-
-
+if __name__ == "__main__":
+    df_final = main()
